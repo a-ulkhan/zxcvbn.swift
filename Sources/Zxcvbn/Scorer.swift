@@ -73,8 +73,15 @@ public struct Scorer {
 
         matchSequence.reverse()
 
-        func makeBruteforceMatch(_ i: String.Index, _ j: String.Index) -> Match {
-            Match(
+        func makeBruteforceMatch(_ i: String.Index, _ j: String.Index) -> Match? {
+            // Validate indices are in correct order and within bounds
+            guard i < j,
+                  i >= password.startIndex,
+                  j <= password.endIndex else {
+                return nil
+            }
+
+            return Match(
                 pattern: "bruteforce",
                 token: String(password[i..<j]),
                 i: i,
@@ -90,13 +97,27 @@ public struct Scorer {
 
         for match in matchSequence {
             if match.i > k {
-                matchSequenceCopy.append(makeBruteforceMatch(k, password.index(before: match.i)))
+                // Use limitedBy to safely get index before match.i
+                guard let indexBeforeI = password.index(match.i, offsetBy: -1, limitedBy: password.startIndex) else {
+                    continue
+                }
+                if let bruteforceMatch = makeBruteforceMatch(k, indexBeforeI) {
+                    matchSequenceCopy.append(bruteforceMatch)
+                }
             }
-            k = password.index(after: match.j)
+
+            // Use limitedBy to safely get index after match.j
+            guard let indexAfterJ = password.index(match.j, offsetBy: 1, limitedBy: password.endIndex) else {
+                // If match.j is at or beyond endIndex, skip this match
+                continue
+            }
+            k = indexAfterJ
             matchSequenceCopy.append(match)
         }
         if k < password.endIndex {
-            matchSequenceCopy.append(makeBruteforceMatch(k, password.endIndex))
+            if let bruteforceMatch = makeBruteforceMatch(k, password.endIndex) {
+                matchSequenceCopy.append(bruteforceMatch)
+            }
         }
 
         var minEntropy = 0.0
@@ -120,17 +141,17 @@ public struct Scorer {
 
 private extension Scorer {
     /*
-    threat model -- stolen hash catastrophe scenario
-    assumes:
-    * passwords are stored as salted hashes, different random salt per user.
-      (making rainbow attacks infeasable.)
-    * hashes and salts were stolen. attacker is guessing passwords at max rate.
-    * attacker has several CPUs at their disposal.
-    * for a hash function like bcrypt/scrypt/PBKDF2, 10ms per guess is a safe lower bound.
-    * (usually a guess would take longer -- this assumes fast hardware and a small work factor.)
-    * adjust for your site accordingly if you use another hash function, possibly by
-    * several orders of magnitude!
-    */
+     threat model -- stolen hash catastrophe scenario
+     assumes:
+     * passwords are stored as salted hashes, different random salt per user.
+     (making rainbow attacks infeasable.)
+     * hashes and salts were stolen. attacker is guessing passwords at max rate.
+     * attacker has several CPUs at their disposal.
+     * for a hash function like bcrypt/scrypt/PBKDF2, 10ms per guess is a safe lower bound.
+     * (usually a guess would take longer -- this assumes fast hardware and a small work factor.)
+     * adjust for your site accordingly if you use another hash function, possibly by
+     * several orders of magnitude!
+     */
     func entropyToCrackTime(_ entropy: Double) -> Double {
         let singleGuess = 0.01
         let numAttackers = 100.0
@@ -342,7 +363,9 @@ private extension Scorer {
     }
 
     func dictionaryEntropy(_ match: inout Match) -> Double {
-        match.baseEntropy = log2(Double(match.rank ?? 0))
+        // Ensure rank is at least 1 to avoid log2(0) which returns -inf
+        let rank = max(match.rank ?? 1, 1)
+        match.baseEntropy = log2(Double(rank))
         match.upperCaseEntropy = extraUppercaseEntropy(match)
         match.l33tEntropy = extraL33tEntropy(match)
         let result = (match.baseEntropy ?? 0) + (match.upperCaseEntropy ?? 0) + (match.l33tEntropy ?? 0)
